@@ -1,4 +1,4 @@
-# Lab：Utils
+# Lab：Sysinfo
 
 @author ：[kosa-as](https://kosa-as.github.io/)
 
