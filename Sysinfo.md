@@ -1,4 +1,4 @@
-# Lab：Sysinfo
+# Lab：system calls
 
 @author ：[kosa-as](https://kosa-as.github.io/)
 
