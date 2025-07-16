@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "sysinfo.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -491,5 +492,22 @@ uint64 sys_trace(void)
   if(argint(0, &mask) < 0)
     return -1;
   myproc()->mask = mask;
+  return 0;
+}
+
+
+uint64 sys_sysinfo(void)
+{
+  uint64 addr;
+  struct sysinfo info;
+  // 获取用户传入指针的地址，用户态中info是一个结构体指针，所以需要使用argaddr
+  if(argaddr(0, &addr) < 0)
+    return -1;
+
+  info.freemem = freemem();
+  info.nproc = nproc();
+  // 使用copyout将info结构体复制到用户空间
+  if(copyout(myproc()->pagetable, addr, (char*)&info, sizeof(info)) < 0)
+    return -1;
   return 0;
 }
