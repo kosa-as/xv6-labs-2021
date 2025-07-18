@@ -11,9 +11,7 @@
 CFLAGS = -Wall -O -fno-omit-frame-pointer -ggdb
 ```
 
-同时在`makefile`中添加用户的执行指令entry("trace");
-
-entry("sysinfo");
+同时在`makefile`中添加用户的执行指令
 
 ```makefile
 UPROGS=\
