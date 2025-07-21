@@ -132,3 +132,15 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void backtrace(void){
+//xv6 内核中每个内核线程的栈大小是一页（4KB），起始地址是页对齐的。
+//PGROUNDUP(fp) 是当前帧指针所在页的顶部地址（也就是栈的“底”），用于防止越过当前线程的栈范围。
+  uint64 fp = r_fp();
+  uint64 stack_bottom = PGROUNDUP(fp);
+  printf("backtrace:\n");
+  while (fp < stack_bottom) {
+    printf("%p\n", *(uint64*)(fp - 8));//栈帧的返回地址
+    fp = *(uint64*)(fp - 16);//调用者的栈帧
+  }
+}

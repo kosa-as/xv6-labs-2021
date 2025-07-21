@@ -1,0 +1,36 @@
+answers-traps.txt
+-----------------
+
+1. Which registers contain arguments to functions?
+在RISC-V架构中，函数参数通过寄存器a0到a7（x10到x17）传递。
+
+2. Where is the call to function f in the assembly code for main? Where is the call to g?
+查找 'jal f' 或 'call f' 指令来定位对函数 f 的调用。但是在文中给出的例子，并没有发生函数的调用，这是因为编译器优化，直接将简单的f和g优化为内联函数了
+
+3. At what address is the function printf located?
+0x 0000000000000616 <printf>:
+
+4. What value is in the register ra just after the jalr to printf in main?
+  30:	00000097          	auipc	ra,0x0
+  34:	5e6080e7          	jalr	1510(ra) # 616 <printf>
+可以得知，返回地址是  0x 38（jalr的作用是跳转并保存返回地址）
+
+5. What is the output of the following code?
+unsigned int i = 0x00646c72;
+printf("H%x Wo%s", 57616, &i);
+57616 in hex is e110 → output: He110
+Little-endian layout of i: 0x72 ('r'), 0x6c ('l'), 0x64 ('d'), 0x00
+So &i is "rld"
+Final output: He110 World
+
+6. If the RISC-V were big-endian, what value would you set i to yield the same output?
+i = 0x726c64
+
+
+7. What is going to be printed after 'y=' in this code? Why?
+printf("x=%d y=%d", 3);
+- This results in undefined behavior.
+- The format string expects two integers, but only one is provided.
+- x=3 y=<garbage_value> (whatever is in a1)
+这一段可以阅读user/printf.c代码可知。printf的核心实现vprintf，使用一个for循环从字符串fmt中从可变参数列表va_list中读取参数，通过宏va_arg来获取参数。
+识别到几个%就会调用几次。因此会发生UB问题，第二个的输出应该为不确定的值
