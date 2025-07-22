@@ -230,7 +230,7 @@ found:
 ...
 ```
 
-注意，这里不用将我们申请的页`saved_trapframe`同当前进程的用户空间地址保存，只是起到一个暂存的作用
+注意，这里不用将我们申请的页`saved_trapframe`同当前进程的用户空间地址映射，只是起到一个暂存的作用
 
 然后在`kernel/sysproc.c`中实现`sys_sigalarm`和`sys_sigreturn`的实现
 
