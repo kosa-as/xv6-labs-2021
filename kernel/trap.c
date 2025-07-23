@@ -65,6 +65,35 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 0xf){// page fault
+    uint64 stval = r_stval();
+    if(stval >= MAXVA){
+      printf("usertrap(): unexpected stval %p pid=%d\n", stval, p->pid);
+      p->killed = 1;
+      return;
+    } 
+    pte_t* pte = walk(p->pagetable, stval, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0 ||(*pte & PTE_COW) == 0){ // 检查页表项是否存在或有效
+      // 如果页表项不存在或不是COW页，说明发生了错误
+      printf("usertrap(): unexpected page fault at %p pid=%d\n", stval, p->pid);
+      p->killed = 1;
+      return;
+    }
+    uint64 shared_pa = PTE2PA(*pte);
+    void *mem = kalloc();
+    if(mem == 0){
+      printf("usertrap(): out of memory at %p pid=%d\n", stval, p->pid);
+      p->killed = 1;
+      return; 
+    }
+    memmove(mem, (void *)shared_pa, PGSIZE);
+    int flags = PTE_FLAGS(*pte) & ~PTE_COW | PTE_W;
+    uvmunmap(p->pagetable, stval, 1, 1);
+    if(mappages(p->pagetable, stval, PGSIZE, (uint64)mem, flags) == 0){
+      kfree((void *)mem);
+      return;
+    }
+    sfence_vma();
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

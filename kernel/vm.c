@@ -310,13 +310,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    //移除父进程的写权限，同时将页打上COW标记
+    *pte &= ~PTE_W;
+    *pte |= PTE_COW;
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    flags = PTE_FLAGS(*pte);//提取flag去映射子页表
+    increase_ref_count(pa);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      // kfree(mem);
       goto err;
     }
   }
@@ -350,7 +355,25 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    // pa0 = walkaddr(pagetable, va0);
+    pte_t* pte = walk(pagetable, va0, 0);
+    if (pte == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) {
+      return -1;
+    }
+    if ((*pte & PTE_W) == 0) {
+      if((*pte & PTE_COW) == 0) return -1; // COW pages cannot be written to
+      // COW pages need to be copied first
+      uint64 pa0_old = PTE2PA(*pte);
+      uint64 pa0_new;
+      if((pa0_new = (uint64)kalloc()) == 0) {
+        return -1;
+      }
+      memmove((void *)pa0_new, (void *)(pa0_old), PGSIZE);
+      *pte = PA2PTE(pa0_new) | (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W;// set write permission
+      sfence_vma(); // flush TLB for this page
+      kfree((void *)(pa0_old)); // free the old page
+    }
+    pa0 = PTE2PA(*pte);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
