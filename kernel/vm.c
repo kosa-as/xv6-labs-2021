@@ -303,20 +303,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    pa = PTE2PA(*pte);//获取页帧的物理地址
+    increase_ref_count(pa);
     //移除父进程的写权限，同时将页打上COW标记
     *pte &= ~PTE_W;
     *pte |= PTE_COW;
-    pa = PTE2PA(*pte);
-
     flags = PTE_FLAGS(*pte);//提取flag去映射子页表
-    increase_ref_count(pa);
+    // 注意这里并没给子进程分配新的物理页
+    // 而是直接映射父进程的物理页
     // if((mem = kalloc()) == 0)
     //   goto err;
     // memmove(mem, (char*)pa, PGSIZE);
@@ -354,26 +354,32 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   uint64 n, va0, pa0;
 
   while(len > 0){
-    va0 = PGROUNDDOWN(dstva);
-    // pa0 = walkaddr(pagetable, va0);
-    pte_t* pte = walk(pagetable, va0, 0);
-    if (pte == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) {
+    va0 = PGROUNDDOWN(dstva);//得到所访问页的起始虚拟地址
+    pa0 = walkaddr(pagetable, va0);//获取该页的物理地址
+    pte_t* pte = walk(pagetable, va0, 0);//获取该页的页表项
+    if (pte == 0  || (*pte & PTE_V) == 0) {
       return -1;
     }
-    if ((*pte & PTE_W) == 0) {
-      if((*pte & PTE_COW) == 0) return -1; // COW pages cannot be written to
-      // COW pages need to be copied first
-      uint64 pa0_old = PTE2PA(*pte);
+    if (*pte & PTE_COW) { //写入的目标页是带有COW标记的页
+      // 如果是COW页，分配一个新的物理页，并将原来的
+      // 页内容复制到新的物理页上。
+      // 这里的pa0是原来的物理页地址
+      // 需要分配一个新的物理页，并将原来的内容复制到新的物理页上
+      // 然后更新页表项，设置写权限，并移除COW标记
+      // 这里的pa0_new是新分配的物理页地址
       uint64 pa0_new;
       if((pa0_new = (uint64)kalloc()) == 0) {
         return -1;
       }
-      memmove((void *)pa0_new, (void *)(pa0_old), PGSIZE);
+      memmove((void *)pa0_new, (void *)(pa0), PGSIZE);
+      uvmunmap(pagetable, va0, 1, 1); // unmap the old page
+      if(mappages(pagetable, va0, PGSIZE, (uint64)pa0_new, (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W) != 0) {
+        kfree((void*)pa0_new);
+        return -1;
+      }
       *pte = PA2PTE(pa0_new) | (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W;// set write permission
-      sfence_vma(); // flush TLB for this page
-      kfree((void *)(pa0_old)); // free the old page
+      pa0 = pa0_new; // use the new page
     }
-    pa0 = PTE2PA(*pte);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
@@ -454,4 +460,35 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int cow_handler(pagetable_t pagetable, uint64 va) // 发生COW缺页的处理函数
+{
+  if (va >= MAXVA) 
+    return -1;
+  pte_t *pte;
+  pte = walk(pagetable, va, 0); //获取传入地址的页表项
+  if (pte == 0) return -1;
+  if ((*pte & PTE_U) == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_COW) == 0)
+    return -1;
+
+  // allocate a new page
+  uint64 pa = PTE2PA(*pte); // original physical address
+  uint64 ka = (uint64) kalloc(); // newly allocated physical address
+
+  if (ka == 0){
+    return -1; // out of memory, set process killed flag
+  }
+
+  memmove((char*)ka, (char*)pa, PGSIZE); // copy the old page to the new page
+  if(mappages(pagetable, va, PGSIZE, ka, (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W) != 0) {
+    kfree((void*)ka); // free the newly allocated page if mapping fails
+    return -1;
+  }
+  // kfree(pa); // free the original page, not necessarily released
+  kfree((void*)pa);//调用kfree，不一定释放掉
+  uint flags = PTE_FLAGS(*pte);//设置标记位
+  *pte = PA2PTE(ka) | flags | PTE_W;
+  *pte &= ~PTE_COW;
+  return 0;
 }

@@ -63,6 +63,9 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+void            increase_ref_count(uint64);
+void            get_ref_count(uint64, int*);
+int             cow_handler(pagetable_t, uint64);
 
 // log.c
 void            initlog(int, struct superblock*);

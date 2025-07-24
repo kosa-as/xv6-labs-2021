@@ -30,8 +30,9 @@ kinit()
 {
   initlock(&kmem.lock, "kmem");
   initlock(&ref_lock, "ref_count");
-  memset(page_ref_count, 1, MAX_PHYSICAL_PAGE_NUM * sizeof(int));
+  // memset(page_ref_count, 1, MAX_PHYSICAL_PAGE_NUM * sizeof(int));
   freerange(end, (void*)PHYSTOP);
+  printf("initialized kalloc, end = %p, PHYSTOP = %p\n", end, (void*)PHYSTOP);
 }
 
 void
@@ -41,6 +42,7 @@ freerange(void *pa_start, void *pa_end)
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
     // printf("freerange: p = %p\n", p);
+    page_ref_count[PA2REFIDX((uint64)p)] = 1; // 初始化引用计数为1
     kfree(p);
   } 
 }
@@ -66,13 +68,10 @@ kfree(void *pa)
   release_flag = page_ref_count[index];
   release(&ref_lock);
 
-  if(release_flag == 0) {
-
-    // Fill with junk to catch dangling refs.
+  if(release_flag == 0){
+  //只有当引用计数为0时才释放
     memset(pa, 1, PGSIZE);
-
     r = (struct run*)pa;
-
     acquire(&kmem.lock);
     r->next = kmem.freelist;
     kmem.freelist = r;
@@ -90,10 +89,10 @@ kalloc(void)
   acquire(&kmem.lock);
   r = kmem.freelist;
   if(r){
-    if(page_ref_count[PA2REFIDX((uint64)r)] < 1)
-      panic("kalloc: page_ref_count < 1");
     kmem.freelist = r->next;
+    acquire(&ref_lock);
     page_ref_count[PA2REFIDX((uint64)r)] = 1;
+    release(&ref_lock);
   }
   release(&kmem.lock);
   if(r) {
@@ -103,7 +102,7 @@ kalloc(void)
 }
 
 void increase_ref_count(uint64 pa){
-  if(pa >  PHYSTOP || pa < KERNBASE)
+  if(pa >  PHYSTOP)
     panic("increase_ref_count: pa out of range");
   acquire(&ref_lock);
   if(page_ref_count[PA2REFIDX(pa)] < 1) {
@@ -114,9 +113,10 @@ void increase_ref_count(uint64 pa){
 }
 
 void get_ref_count(uint64 pa, int *count){
-  if(pa >  PHYSTOP || pa < KERNBASE)
+  if(pa >  PHYSTOP)
     panic("get_ref_count: pa out of range");
   acquire(&ref_lock);
   *count = page_ref_count[PA2REFIDX(pa)];
   release(&ref_lock);
 }
+

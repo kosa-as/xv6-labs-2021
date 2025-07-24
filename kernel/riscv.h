@@ -364,7 +364,7 @@ sfence_vma()
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
 
 // 将物理地址转换为数组索引
-#define PA2REFIDX(pa) (((pa) - KERNBASE)  >> PGSHIFT)
+#define PA2REFIDX(pa) (pa  >> PGSHIFT)
 
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
