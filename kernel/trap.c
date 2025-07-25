@@ -65,7 +65,7 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if(r_scause() == 0xf){// page fault
+  } else if(r_scause() == 0xd || r_scause() == 0xf){// store/AMO page fault or store page fault
     if(cow_handler(p->pagetable, r_stval()) < 0){
       printf("usertrap(): page fault at %p pid=%d\n", r_stval(), p->pid);
       p->killed = 1;

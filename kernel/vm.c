@@ -355,29 +355,33 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);//得到所访问页的起始虚拟地址
+    
+    // 检查虚拟地址是否在有效范围内
+    if(va0 >= MAXVA) {
+      return -1;
+    }
+    
     pa0 = walkaddr(pagetable, va0);//获取该页的物理地址
+    if(pa0 == 0) {
+      return -1;
+    }
+    
     pte_t* pte = walk(pagetable, va0, 0);//获取该页的页表项
     if (pte == 0  || (*pte & PTE_V) == 0) {
       return -1;
     }
     if (*pte & PTE_COW) { //写入的目标页是带有COW标记的页
-      // 如果是COW页，分配一个新的物理页，并将原来的
-      // 页内容复制到新的物理页上。
-      // 这里的pa0是原来的物理页地址
-      // 需要分配一个新的物理页，并将原来的内容复制到新的物理页上
-      // 然后更新页表项，设置写权限，并移除COW标记
-      // 这里的pa0_new是新分配的物理页地址
+      // 如果是COW页，分配一个新的物理页，并将原来的内容复制到新的物理页上。
       uint64 pa0_new;
       if((pa0_new = (uint64)kalloc()) == 0) {
         return -1;
       }
       memmove((void *)pa0_new, (void *)(pa0), PGSIZE);
-      uvmunmap(pagetable, va0, 1, 1); // unmap the old page
-      if(mappages(pagetable, va0, PGSIZE, (uint64)pa0_new, (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W) != 0) {
-        kfree((void*)pa0_new);
-        return -1;
-      }
+      // 直接更新页表项，而不是使用uvmunmap
       *pte = PA2PTE(pa0_new) | (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W;// set write permission
+      sfence_vma(); // flush TLB for this page
+      // 使用kfree来正确处理引用计数
+      kfree((void*)pa0);
       pa0 = pa0_new; // use the new page
     }
     if(pa0 == 0)
@@ -481,14 +485,13 @@ int cow_handler(pagetable_t pagetable, uint64 va) // 发生COW缺页的处理函
   }
 
   memmove((char*)ka, (char*)pa, PGSIZE); // copy the old page to the new page
-  if(mappages(pagetable, va, PGSIZE, ka, (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W) != 0) {
-    kfree((void*)ka); // free the newly allocated page if mapping fails
-    return -1;
-  }
-  // kfree(pa); // free the original page, not necessarily released
-  kfree((void*)pa);//调用kfree，不一定释放掉
-  uint flags = PTE_FLAGS(*pte);//设置标记位
-  *pte = PA2PTE(ka) | flags | PTE_W;
-  *pte &= ~PTE_COW;
+
+  // 直接修改页表项，而不是使用mappages
+  uint flags = PTE_FLAGS(*pte); // 获取原有的标志位
+  *pte = PA2PTE(ka) | (flags & ~PTE_COW) | PTE_W; // 设置新的物理地址，移除COW标记，添加写权限
+  
+  sfence_vma(); // flush TLB for this page
+  kfree((void*)pa); // 调用kfree，根据引用计数决定是否释放掉原页面
+  
   return 0;
 }
