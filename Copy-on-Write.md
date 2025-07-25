@@ -67,6 +67,9 @@ freerange(void *pa_start, void *pa_end)
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
+// 在开启cow之后，kfree不再直接释放页，而是通过引用计数来控制页的释放
+// 如果引用计数大于1，则不释放页，而是减少引用计数
+// 如果引用计数为0，则释放页
 void
 kfree(void *pa)
 {
@@ -203,6 +206,102 @@ if(r_scause() == 8){
 ...
 ```
 
+接下来实现 `cow_handler`函数，在 `kernel/vm.c`中添加如下代码
+
+```c
+int cow_handler(pagetable_t pagetable, uint64 va) // 发生COW缺页的处理函数
+{
+  if (va >= MAXVA) //必须要做越界检查，不然无法通过usertests
+    return -1;
+  pte_t *pte;
+  pte = walk(pagetable, va, 0); //获取传入地址的页表项，判断能否正常寻找到物理页
+  if (pte == 0) return -1;
+  if ((*pte & PTE_U) == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_COW) == 0)//检查这个物理页的权限
+    return -1;
+
+  // allocate a new page
+  uint64 pa = PTE2PA(*pte); // 获取原有物理页的地址
+  uint64 ka = (uint64) kalloc(); // 分配一个新的物理页
+
+  if (ka == 0){
+    return -1; // out of memory
+  }
+
+  memmove((char*)ka, (char*)pa, PGSIZE); // 将原有物理页的内容复制到新的物理页中
+
+  // 直接修改页表项，而不是使用mappages
+  uint flags = PTE_FLAGS(*pte); // 获取原有的标志位
+  *pte = PA2PTE(ka) | (flags & ~PTE_COW) | PTE_W; // 设置新的物理地址的pte，移除COW标记，添加写权限
+  
+  sfence_vma(); // flush TLB
+  kfree((void*)pa); // 调用kfree，根据减少引用次数
+  
+  return 0;
+}
+```
+
+最后，在内核态写回用户空间的时候，需要调用`copyout`函数来实现数据的传输。在 `kernel/vm.c`中修改`copyout`函数如下
+
+```c
+// Copy from kernel to user.
+// Copy len bytes from src to virtual address dstva in a given page table.
+// Return 0 on success, -1 on error.
+int
+copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+{
+  uint64 n, va0, pa0;
+
+  while(len > 0){
+    va0 = PGROUNDDOWN(dstva);//得到所访问页的起始虚拟地址
+    
+    // 检查虚拟地址是否在有效范围内
+    if(va0 >= MAXVA) {
+      return -1;
+    }
+    
+    pa0 = walkaddr(pagetable, va0);//获取该页的物理地址,并判断是否有效
+    if(pa0 == 0) {
+      return -1;
+    }
+    
+    pte_t* pte = walk(pagetable, va0, 0);//获取该页的页表项
+    if (pte == 0  || (*pte & PTE_V) == 0) {
+      return -1;
+    }
+    if (*pte & PTE_COW) { //写入的目标页是带有COW标记的页
+      // 如果是COW页，分配一个新的物理页，并将原来的内容复制到新的物理页上。
+      uint64 pa0_new;
+      if((pa0_new = (uint64)kalloc()) == 0) {
+        return -1;
+      }
+      memmove((void *)pa0_new, (void *)(pa0), PGSIZE);
+      // 直接更新页表项，而不是使用mappages,这里使用mappages会
+      // 设置旧的页表项映射到新的物理页地址，并移除COW标记，添加写权限
+      *pte = PA2PTE(pa0_new) | (PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W;
+      sfence_vma(); // flush TLB for this page
+      // 使用kfree来正确处理引用计数
+      kfree((void*)pa0);
+      pa0 = pa0_new;
+    }
+    if(pa0 == 0)
+      return -1;
+    n = PGSIZE - (dstva - va0);
+    if(n > len)
+      n = len;
+    memmove((void *)(pa0 + (dstva - va0)), src, n);
+
+    len -= n;
+    src += n;
+    dstva = va0 + PGSIZE;
+  }
+  return 0;
+}
+```
+
 ## 总结
 
-xv6-2021fall 的页表实验实现了基于 RISC-V Sv39 格式的三级页表结构，涉及虚拟地址到物理地址的多级转换机制。通过 `walk` 实现页表项查找与可选分配，`mappages` 用于建立虚实映射，`uvmalloc` 完成用户内存空间扩展，`copyout` 和 `copyin` 实现内核与用户态的数据传输，`vmprint` 可视化页表结构。通过实现该部分，可以更好的理解操作系统中页表是怎么实际管理的
+- 在xv6中,通过了pagetable_t来管理其用户态虚拟地址空间,它指向sv39页表结构的最高层页表索引.
+- xv6通过在页表项中添加COW标记位来实现Copy-on-Write技术
+  - 在fork时,只复制父进程的页表结构,父进程下的所有页的标记位设置为可读和COW.
+  - 当子进程或者父进程需要写入带有COW标记的页时,触发缺页异常,然后分配新的物理页并复制内容.当引用计数为0的时候,释放掉物理页.
+- 在内核向用户空间写入数据时,使用copyout函数来处理COW页的写入,如果是COW页,则分配新的物理页并复制内容到新的物理页上,然后更新页表项.
