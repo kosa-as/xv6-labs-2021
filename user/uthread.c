@@ -10,10 +10,17 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
+typedef struct context {
+  uint64 ra;        /* return address */
+  uint64 sp;        /* stack pointer */
+  uint64 s[12];     /* callee-saved registers s0-s11 */
+} context_t;
+
 
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
+  context_t  context;           /* 进程的上下文 */
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
@@ -62,6 +69,9 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    t->state = RUNNABLE; // 将当前线程状态设置为可运行
+    //切换线程
+    thread_switch((uint64)&t->context, (uint64)&next_thread->context);
   } else
     next_thread = 0;
 }
@@ -70,12 +80,14 @@ void
 thread_create(void (*func)())
 {
   struct thread *t;
-
+  // 找到可以运行的线程描述符
   for (t = all_thread; t < all_thread + MAX_THREAD; t++) {
     if (t->state == FREE) break;
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  t->context.ra = (uint64)func;  // 设置返回地址为函数入口
+  t->context.sp = (uint64)(t->stack + STACK_SIZE); // 设置栈指针+栈大小为栈顶，因为栈是向下增长的
 }
 
 void 
