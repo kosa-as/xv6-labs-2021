@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <sys/time.h>
+#include <stdatomic.h>
 
 #define NBUCKET 5
 #define NKEYS 100000
@@ -17,6 +18,7 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+pthread_mutex_t *mutexes[NBUCKET];
 
 double
 now()
@@ -39,22 +41,39 @@ insert(int key, int value, struct entry **p, struct entry *n)
 static 
 void put(int key, int value)
 {
-  int i = key % NBUCKET;
 
+
+  int i = key % NBUCKET;
+  struct entry *last_e = 0;
   // is the key already present?
   struct entry *e = 0;
+  
   for (e = table[i]; e != 0; e = e->next) {
-    if (e->key == key)
+    if (e->key == key){
       break;
+    }
+    last_e = e;
   }
   if(e){
     // update the existing key.
+    pthread_mutex_lock(mutexes[i]);
     e->value = value;
+    pthread_mutex_unlock(mutexes[i]);
   } else {
+    pthread_mutex_lock(mutexes[i]);
     // the new is new.
-    insert(key, value, &table[i], table[i]);
+    for(e = last_e; e != 0; e = e -> next){
+      if (e->key == key){
+        break;
+      }
+    }
+    if(e){
+      e->value = value;
+    }else{
+      insert(key, value, &table[i], table[i]);
+    }
+    pthread_mutex_unlock(mutexes[i]);
   }
-
 }
 
 static struct entry*
@@ -118,6 +137,10 @@ main(int argc, char *argv[])
     keys[i] = random();
   }
 
+  for (int i = 0; i < NBUCKET; i++) {
+    mutexes[i] = malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(mutexes[i], NULL);
+  }
   //
   // first the puts
   //
@@ -144,6 +167,11 @@ main(int argc, char *argv[])
     assert(pthread_join(tha[i], &value) == 0);
   }
   t1 = now();
+
+  for (int i = 0; i < NBUCKET; i++) {
+    pthread_mutex_destroy(mutexes[i]);
+    free(mutexes[i]);
+  }
 
   printf("%d gets, %.3f seconds, %.0f gets/second\n",
          NKEYS*nthread, t1 - t0, (NKEYS*nthread) / (t1 - t0));

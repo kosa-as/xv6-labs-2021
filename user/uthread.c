@@ -69,7 +69,6 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
-    t->state = RUNNABLE; // 将当前线程状态设置为可运行
     //切换线程
     thread_switch((uint64)&t->context, (uint64)&next_thread->context);
   } else
@@ -87,7 +86,7 @@ thread_create(void (*func)())
   t->state = RUNNABLE;
   // YOUR CODE HERE
   t->context.ra = (uint64)func;  // 设置返回地址为函数入口
-  t->context.sp = (uint64)(t->stack + STACK_SIZE); // 设置栈指针+栈大小为栈顶，因为栈是向下增长的
+  t->context.sp = (uint64)t->stack + STACK_SIZE; // 设置栈指针+栈大小为栈顶，因为栈是向下增长的
 }
 
 void 
