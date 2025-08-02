@@ -61,7 +61,8 @@ static void insert(struct buf *b){
 static void remove(struct buf *b) {
   int h = hash(b->dev, b->blockno);
   struct buf *cursor = &bcache.buckets[h];
-  for(; cursor != NULL; cursor = cursor->next) {
+  for(; cursor != NULL && cursor->next != NULL; cursor = cursor->next) { 
+    // 这里要注意判断cursor->next是否为NULL,否则会出现越界行为
     if(cursor->next->dev == b->dev && cursor->next->blockno == b->blockno) {
       cursor->next = b->next;
       return;
@@ -103,12 +104,28 @@ bget(uint dev, uint blockno)
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
   for(int i = 0; i < NBUF; i++) {
-    // struct buf new_buf = bcache.buf[i];
     if(bcache.buf[i].refcnt == 0) {
       int h = hash(bcache.buf[i].dev, bcache.buf[i].blockno);
-      if(h != index) {//避免重复获取锁
-        acquire(&bcache.hashlock[h]);
-      } 
+      
+      // 为了避免死锁，总是按照索引顺序获取锁
+      if(h != index) {
+        if(h < index) {
+          release(&bcache.hashlock[index]);
+          acquire(&bcache.hashlock[h]);
+          acquire(&bcache.hashlock[index]);
+        } else {
+          acquire(&bcache.hashlock[h]);
+        }
+      }
+      
+      // 重新检查 refcnt，因为我们可能释放过锁
+      if(bcache.buf[i].refcnt != 0) {
+        if(h != index) {
+          release(&bcache.hashlock[h]);
+        }
+        continue;
+      }
+      
       b = &bcache.buf[i];
       remove(b);
       b->dev = dev;
@@ -126,6 +143,7 @@ bget(uint dev, uint blockno)
       return b;
     }
   }
+  release(&bcache.hashlock[index]);
   panic("bget: no buffers");
 }
 
