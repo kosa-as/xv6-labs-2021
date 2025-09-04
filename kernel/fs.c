@@ -63,7 +63,7 @@ bzero(int dev, int bno)
 // Allocate a zeroed disk block.
 static uint
 balloc(uint dev)
-{
+{// 接受设备号dev，分配一个空闲的磁盘块，并且返回该块的编号。
   int b, bi, m;
   struct buf *bp;
 
@@ -171,7 +171,7 @@ bfree(int dev, uint b)
 // dev, and inum.  One must hold ip->lock in order to
 // read or write that inode's ip->valid, ip->size, ip->type, &c.
 
-struct {
+struct {// itable维护的是在内存中的inode表，确保活跃在内存中inode的唯一性
   struct spinlock lock;
   struct inode inode[NINODE];
 } itable;
